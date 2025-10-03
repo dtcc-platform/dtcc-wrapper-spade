@@ -10,6 +10,7 @@ struct Input {
     quality: String,
     enforce_constraints: bool,
     min_angle: Option<f64>,  // Minimum angle in degrees
+    exclude_holes: Option<bool>,  // If true, exclude inner loops as holes (default: true)
 }
 
 #[derive(Serialize)]
@@ -84,7 +85,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Use refinement to properly identify and exclude holes (only if we have constraint edges)
-    let excluded_faces = if has_constraints {
+    let should_exclude_holes = input.exclude_holes.unwrap_or(true);  // Default: exclude holes
+    let excluded_faces = if has_constraints && should_exclude_holes {
         // Set up refinement parameters
         let mut params = RefinementParameters::<f64>::new()
             .exclude_outer_faces(true);  // Exclude outer boundary and holes
@@ -111,6 +113,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Perform refinement and get excluded faces (holes + outer boundary)
         let result = cdt.refine(params);
         result.excluded_faces
+    } else if has_constraints && !should_exclude_holes {
+        // Have constraints but want to include holes - refine everything
+        let mut params = RefinementParameters::<f64>::new()
+            .exclude_outer_faces(false);  // Include everything
+
+        // Add maxh constraint if specified
+        if let Some(max_edge_len) = input.maxh {
+            let max_area = 0.433 * max_edge_len * max_edge_len;
+            params = params.with_max_allowed_area(max_area);
+        }
+
+        // Set angle limit
+        if let Some(min_angle) = input.min_angle {
+            params = params.with_angle_limit(AngleLimit::from_deg(min_angle));
+        } else if input.quality == "moderate" {
+            params = params.with_angle_limit(AngleLimit::from_deg(25.0));
+        } else {
+            params = params.with_angle_limit(AngleLimit::from_deg(0.0));
+        }
+
+        cdt.refine(params);
+        Vec::new()
     } else {
         // No constraint edges: simple refinement without exclusions
         if let Some(max_edge_len) = input.maxh {

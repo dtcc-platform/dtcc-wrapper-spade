@@ -19,7 +19,8 @@ def triangulate(
     maxh: Optional[float] = None,
     quality: str = "default",
     enforce_constraints: bool = False,
-    min_angle: Optional[float] = None
+    min_angle: Optional[float] = None,
+    exclude_holes: bool = True
 ) -> Tuple[List[Tuple[float, float, float]], List[Tuple[int, int, int]], List[Tuple[int, int]]]:
     """
     Triangulate a polygon using Spade.
@@ -31,6 +32,7 @@ def triangulate(
         quality: "default" or "moderate" - refinement quality level
         enforce_constraints: If True, enforce PSLG edges as constraints
         min_angle: Minimum angle in degrees (overrides quality setting)
+        exclude_holes: If True, exclude inner loops as holes; if False, triangulate them (default: True)
 
     Returns:
         Tuple of:
@@ -47,6 +49,7 @@ def triangulate(
         "quality": quality,
         "enforce_constraints": enforce_constraints,
         "min_angle": min_angle,
+        "exclude_holes": exclude_holes,
     }
 
     # Call Rust CLI
