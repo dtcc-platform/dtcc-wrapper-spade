@@ -15,7 +15,7 @@ name = "pyspade"
 crate-type = ["cdylib"]
 
 [dependencies]
-spade = { path = "../spade" }
+spade = { git = "https://github.com/Stoeoef/spade", tag = "v2.15.0" }
 pyo3 = { version = "0.22", features = ["extension-module"] }
 
 [profile.release]

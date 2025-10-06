@@ -242,6 +242,10 @@ pip install maturin
 maturin develop --release
 ```
 
+**Note:** The Spade library is automatically fetched from GitHub during build via Cargo's Git dependencies. No submodules or manual downloads required!
+
+See [BUILD.md](BUILD.md) for detailed build instructions and troubleshooting.
+
 ## License
 
 Licensed under either of:

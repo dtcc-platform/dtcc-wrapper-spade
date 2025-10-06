@@ -6,6 +6,7 @@ spade/
 **/*.rs.bk
 *.pdb
 Cargo.lock
+!pyspade/Cargo.lock
 spade-cli/target/
 pyspade/target/
 
