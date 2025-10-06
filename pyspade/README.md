@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/pyspade.svg)](https://pypi.org/project/pyspade/)
 [![Python](https://img.shields.io/pypi/pyversions/pyspade.svg)](https://pypi.org/project/pyspade/)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/yourusername/pyspade)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/dtcc-platform/pyspade)
 
 Fast 2D Delaunay triangulation library for Python with constrained edges and mesh refinement.
 
@@ -236,7 +236,7 @@ Requires Rust toolchain (1.70+):
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone and build
-git clone https://github.com/yourusername/pyspade
+git clone https://github.com/dtcc-platform/pyspade
 cd pyspade
 pip install maturin
 maturin develop --release
