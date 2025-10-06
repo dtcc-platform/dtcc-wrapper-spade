@@ -7,6 +7,7 @@ spade/
 *.pdb
 Cargo.lock
 spade-cli/target/
+pyspade/target/
 
 # Python
 __pycache__/

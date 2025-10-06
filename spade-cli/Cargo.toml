@@ -3,7 +3,20 @@ name = "spade-cli"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "spade_python"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "spade-cli"
+path = "src/main.rs"
+
 [dependencies]
 spade = { path = "../spade" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+
+[build-dependencies]
+pyo3-build-config = "0.22"

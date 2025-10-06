@@ -1,0 +1,24 @@
+[package]
+name = "pyspade"
+version = "0.1.0"
+edition = "2021"
+authors = ["Spade Contributors"]
+description = "Python bindings for Spade - A fast 2D Delaunay triangulation library"
+readme = "README.md"
+repository = "https://github.com/yourusername/pyspade"
+license = "MIT OR Apache-2.0"
+keywords = ["triangulation", "delaunay", "mesh", "geometry", "computational-geometry"]
+categories = ["algorithms", "science"]
+
+[lib]
+name = "pyspade"
+crate-type = ["cdylib"]
+
+[dependencies]
+spade = { path = "../spade" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

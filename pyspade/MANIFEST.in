@@ -1,0 +1,7 @@
+include LICENSE-MIT
+include LICENSE-APACHE
+include README.md
+include Cargo.toml
+include pyproject.toml
+recursive-include src *.rs
+recursive-include python *.py *.pyi
