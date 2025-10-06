@@ -266,8 +266,8 @@ If you use pyspade in your research, please cite:
 ```bibtex
 @software{pyspade,
   title = {pyspade: Fast 2D Delaunay triangulation for Python},
-  author = {Spade Contributors},
-  year = {2024},
-  url = {https://github.com/yourusername/pyspade}
+  author = {Vasilis Naserentin},
+  year = {2025},
+  url = {https://github.com/dtcc-platform/pyspade}
 }
 ```
