@@ -1,0 +1,7 @@
+# Example programs for Spade C++ wrapper
+
+add_executable(simple_triangulation simple_triangulation.cpp)
+target_link_libraries(simple_triangulation PRIVATE spade_wrapper)
+
+add_executable(polygon_with_holes polygon_with_holes.cpp)
+target_link_libraries(polygon_with_holes PRIVATE spade_wrapper)

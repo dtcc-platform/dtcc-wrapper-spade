@@ -9,6 +9,8 @@ Cargo.lock
 !pyspade/Cargo.lock
 spade-cli/target/
 pyspade/target/
+cppspade/target/
+cppspade/build/
 
 # Python
 __pycache__/
