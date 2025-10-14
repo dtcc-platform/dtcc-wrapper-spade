@@ -42,9 +42,12 @@ typedef enum {
 SpadeResult* spade_triangulate(
     const SpadePoint* outer_points,
     size_t outer_count,
-    const SpadePoint* const* inner_loops,
-    const size_t* inner_loop_counts,
-    size_t num_inner_loops,
+    const SpadePoint* const* hole_loops,
+    const size_t* hole_loop_counts,
+    size_t num_hole_loops,
+    const SpadePoint* const* building_loops,
+    const size_t* building_loop_counts,
+    size_t num_building_loops,
     double maxh,
     SpadeQuality quality,
     int enforce_constraints

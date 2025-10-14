@@ -1,5 +1,6 @@
 #include "spade_wrapper.h"
 #include "spade_ffi.h"
+#include <cmath>
 #include <stdexcept>
 #include <memory>
 
@@ -7,7 +8,8 @@ namespace spade {
 
 TriangulationResult triangulate(
     const std::vector<Point>& outer,
-    const std::vector<std::vector<Point>>& inner_loops,
+    const std::vector<std::vector<Point>>& holes,
+    const std::vector<std::vector<Point>>& building_loops,
     double maxh,
     Quality quality,
     bool enforce_constraints
@@ -16,31 +18,61 @@ TriangulationResult triangulate(
         throw std::invalid_argument("Outer polygon must have at least one point");
     }
 
-    // Convert outer points to C format
-    std::vector<SpadePoint> outer_c(outer.size());
-    for (size_t i = 0; i < outer.size(); ++i) {
-        outer_c[i] = {outer[i].x, outer[i].y, outer[i].z};
-    }
-
-    // Convert inner loops to C format
-    std::vector<std::vector<SpadePoint>> inner_loops_c;
-    std::vector<const SpadePoint*> inner_loops_ptrs;
-    std::vector<size_t> inner_loop_counts;
-
-    for (const auto& inner : inner_loops) {
-        if (!inner.empty()) {
-            std::vector<SpadePoint> inner_c(inner.size());
-            for (size_t i = 0; i < inner.size(); ++i) {
-                inner_c[i] = {inner[i].x, inner[i].y, inner[i].z};
+    auto convert_loop = [](const std::vector<Point>& loop) {
+        std::vector<SpadePoint> converted;
+        converted.reserve(loop.size() + 1);
+        for (const auto& p : loop) {
+            converted.push_back({p.x, p.y, p.z});
+        }
+        if (!converted.empty()) {
+            const auto& first = converted.front();
+            const auto& last = converted.back();
+            if (std::fabs(first.x - last.x) > 1e-10 || std::fabs(first.y - last.y) > 1e-10) {
+                converted.push_back(first);
             }
-            inner_loops_c.push_back(std::move(inner_c));
+        }
+        return converted;
+    };
+
+    // Convert outer points to C format
+    std::vector<SpadePoint> outer_c = convert_loop(outer);
+
+    // Convert hole loops
+    std::vector<std::vector<SpadePoint>> holes_c;
+    holes_c.reserve(holes.size());
+    for (const auto& hole : holes) {
+        auto converted = convert_loop(hole);
+        if (!converted.empty()) {
+            holes_c.push_back(std::move(converted));
         }
     }
 
-    // Create pointer array for inner loops
-    for (const auto& inner : inner_loops_c) {
-        inner_loops_ptrs.push_back(inner.data());
-        inner_loop_counts.push_back(inner.size());
+    std::vector<const SpadePoint*> hole_ptrs;
+    std::vector<size_t> hole_counts;
+    hole_ptrs.reserve(holes_c.size());
+    hole_counts.reserve(holes_c.size());
+    for (const auto& hole : holes_c) {
+        hole_ptrs.push_back(hole.data());
+        hole_counts.push_back(hole.size());
+    }
+
+    // Convert building loops
+    std::vector<std::vector<SpadePoint>> building_loops_c;
+    building_loops_c.reserve(building_loops.size());
+    for (const auto& loop : building_loops) {
+        auto converted = convert_loop(loop);
+        if (!converted.empty()) {
+            building_loops_c.push_back(std::move(converted));
+        }
+    }
+
+    std::vector<const SpadePoint*> building_ptrs;
+    std::vector<size_t> building_counts;
+    building_ptrs.reserve(building_loops_c.size());
+    building_counts.reserve(building_loops_c.size());
+    for (const auto& loop : building_loops_c) {
+        building_ptrs.push_back(loop.data());
+        building_counts.push_back(loop.size());
     }
 
     // Convert quality enum
@@ -51,9 +83,12 @@ TriangulationResult triangulate(
     SpadeResult* result_ptr = spade_triangulate(
         outer_c.data(),
         outer_c.size(),
-        inner_loops_ptrs.empty() ? nullptr : inner_loops_ptrs.data(),
-        inner_loop_counts.empty() ? nullptr : inner_loop_counts.data(),
-        inner_loops_ptrs.size(),
+        hole_ptrs.empty() ? nullptr : hole_ptrs.data(),
+        hole_counts.empty() ? nullptr : hole_counts.data(),
+        hole_ptrs.size(),
+        building_ptrs.empty() ? nullptr : building_ptrs.data(),
+        building_counts.empty() ? nullptr : building_counts.data(),
+        building_ptrs.size(),
         maxh,
         quality_c,
         enforce_constraints ? 1 : 0

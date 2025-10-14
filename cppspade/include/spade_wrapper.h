@@ -47,18 +47,42 @@ struct TriangulationResult {
 // Main triangulation function
 // Parameters:
 //   outer: exterior polygon vertices (must be closed, i.e., first == last)
-//   inner_loops: vector of hole/island polygons (each must be closed)
+//   holes: vector of hole polygons (each must be closed, these regions will be excluded)
+//   building_loops: vector of constraint-only polygons (each must be closed; interiors are meshed)
 //   maxh: target maximum edge length (converted to area constraint)
 //   quality: refinement quality level
 //   enforce_constraints: whether to honor PSLG edges as constraints
 // Returns: TriangulationResult containing vertices, triangles, and edges
 TriangulationResult triangulate(
     const std::vector<Point>& outer,
-    const std::vector<std::vector<Point>>& inner_loops,
+    const std::vector<std::vector<Point>>& holes,
+    const std::vector<std::vector<Point>>& building_loops,
     double maxh,
     Quality quality = Quality::Default,
     bool enforce_constraints = true
 );
+
+// Convenience overload when only building loops are provided (no explicit holes).
+inline TriangulationResult triangulate(
+    const std::vector<Point>& outer,
+    const std::vector<std::vector<Point>>& building_loops,
+    double maxh,
+    Quality quality = Quality::Default,
+    bool enforce_constraints = true
+) {
+    return triangulate(outer, {}, building_loops, maxh, quality, enforce_constraints);
+}
+
+// Convenience overload when holes are provided but no building loops.
+inline TriangulationResult triangulate_with_holes(
+    const std::vector<Point>& outer,
+    const std::vector<std::vector<Point>>& holes,
+    double maxh,
+    Quality quality = Quality::Default,
+    bool enforce_constraints = true
+) {
+    return triangulate(outer, holes, {}, maxh, quality, enforce_constraints);
+}
 
 } // namespace spade
 

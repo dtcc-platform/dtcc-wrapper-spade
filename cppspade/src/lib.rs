@@ -1,4 +1,6 @@
-use spade::{ConstrainedDelaunayTriangulation, Point2, RefinementParameters, AngleLimit, Triangulation};
+use spade::{
+    AngleLimit, ConstrainedDelaunayTriangulation, Point2, RefinementParameters, Triangulation,
+};
 use std::collections::HashMap;
 
 #[repr(C)]
@@ -40,72 +42,54 @@ pub struct SpadeResult {
 pub extern "C" fn spade_triangulate(
     outer_points: *const SpadePoint,
     outer_count: usize,
-    inner_loops: *const *const SpadePoint,
-    inner_loop_counts: *const usize,
-    num_inner_loops: usize,
+    hole_loops: *const *const SpadePoint,
+    hole_loop_counts: *const usize,
+    num_hole_loops: usize,
+    building_loops: *const *const SpadePoint,
+    building_loop_counts: *const usize,
+    num_building_loops: usize,
     maxh: f64,
     quality: SpadeQuality,
     enforce_constraints: i32,
 ) -> *mut SpadeResult {
-    // Safety: convert raw pointers to slices
     if outer_points.is_null() || outer_count == 0 {
         return std::ptr::null_mut();
     }
 
-    let outer_slice = unsafe { std::slice::from_raw_parts(outer_points, outer_count) };
+    unsafe {
+        let outer_slice = std::slice::from_raw_parts(outer_points, outer_count);
+        let outer = normalize_loop(
+            outer_slice
+                .iter()
+                .map(|p| Point2::new(p.x, p.y))
+                .collect::<Vec<_>>(),
+        );
 
-    // Convert outer points
-    let mut outer: Vec<(f64, f64)> = outer_slice.iter().map(|p| (p.x, p.y)).collect();
+        let holes = convert_loop_group(hole_loops, hole_loop_counts, num_hole_loops);
+        let building_loops =
+            convert_loop_group(building_loops, building_loop_counts, num_building_loops);
 
-    // Ensure outer loop is closed
-    if let (Some(first), Some(last)) = (outer.first(), outer.last()) {
-        if (first.0 - last.0).abs() > 1e-10 || (first.1 - last.1).abs() > 1e-10 {
-            outer.push(*first);
+        match triangulate_polygon(
+            outer,
+            holes,
+            building_loops,
+            if maxh > 0.0 { Some(maxh) } else { None },
+            match quality {
+                SpadeQuality::Moderate => "moderate".to_string(),
+                SpadeQuality::Default => "default".to_string(),
+            },
+            enforce_constraints != 0,
+        ) {
+            Ok(result) => Box::into_raw(Box::new(result)),
+            Err(_) => std::ptr::null_mut(),
         }
-    }
-
-    // Convert inner loops
-    let mut inner_loops_vec: Vec<Vec<(f64, f64)>> = Vec::new();
-    if !inner_loops.is_null() && !inner_loop_counts.is_null() && num_inner_loops > 0 {
-        let inner_ptrs = unsafe { std::slice::from_raw_parts(inner_loops, num_inner_loops) };
-        let inner_counts = unsafe { std::slice::from_raw_parts(inner_loop_counts, num_inner_loops) };
-
-        for i in 0..num_inner_loops {
-            if !inner_ptrs[i].is_null() && inner_counts[i] > 0 {
-                let inner_slice = unsafe { std::slice::from_raw_parts(inner_ptrs[i], inner_counts[i]) };
-                let mut inner: Vec<(f64, f64)> = inner_slice.iter().map(|p| (p.x, p.y)).collect();
-
-                // Ensure inner loop is closed
-                if let (Some(first), Some(last)) = (inner.first(), inner.last()) {
-                    if (first.0 - last.0).abs() > 1e-10 || (first.1 - last.1).abs() > 1e-10 {
-                        inner.push(*first);
-                    }
-                }
-
-                inner_loops_vec.push(inner);
-            }
-        }
-    }
-
-    // Perform triangulation
-    match triangulate_polygon(
-        outer,
-        inner_loops_vec,
-        if maxh > 0.0 { Some(maxh) } else { None },
-        match quality {
-            SpadeQuality::Moderate => "moderate".to_string(),
-            SpadeQuality::Default => "default".to_string(),
-        },
-        enforce_constraints != 0,
-    ) {
-        Ok(result) => Box::into_raw(Box::new(result)),
-        Err(_) => std::ptr::null_mut(),
     }
 }
 
 fn triangulate_polygon(
-    outer: Vec<(f64, f64)>,
-    inner_loops: Vec<Vec<(f64, f64)>>,
+    outer: Vec<Point2<f64>>,
+    holes: Vec<Vec<Point2<f64>>>,
+    building_loops: Vec<Vec<Point2<f64>>>,
     maxh: Option<f64>,
     quality: String,
     enforce_constraints: bool,
@@ -115,64 +99,63 @@ fn triangulate_polygon(
     let mut edges = Vec::new();
     let mut vertex_idx = 0;
 
-    // Add outer loop vertices
-    let outer_start = vertex_idx;
-    for &(x, y) in &outer {
-        vertices.push(Point2::new(x, y));
-        vertex_idx += 1;
-    }
-    let outer_end = vertex_idx;
-
-    // Create edges for outer loop (skip duplicate closing point)
-    let outer_vertex_count = if outer.len() > 1 &&
-        (outer[0].0 - outer[outer.len()-1].0).abs() < 1e-10 &&
-        (outer[0].1 - outer[outer.len()-1].1).abs() < 1e-10 {
-        outer.len() - 1
-    } else {
-        outer.len()
-    };
-
-    for i in 0..outer_vertex_count {
-        let next = (i + 1) % outer_vertex_count;
-        edges.push([outer_start + i, outer_start + next]);
+    let outer_len = outer.len();
+    if outer_len < 3 {
+        return Err("Outer boundary must contain at least three points".into());
     }
 
-    // Add inner loops
-    for inner in &inner_loops {
-        let inner_start = vertex_idx;
-        for &(x, y) in inner {
-            vertices.push(Point2::new(x, y));
+    let mut push_loop = |loop_points: &Vec<Point2<f64>>| {
+        let start_index = vertex_idx;
+        for point in loop_points {
+            vertices.push(*point);
             vertex_idx += 1;
         }
-        let inner_end = vertex_idx;
+        (start_index, loop_points.len())
+    };
 
-        // Create edges for inner loop (skip duplicate closing point)
-        let inner_vertex_count = if inner.len() > 1 &&
-            (inner[0].0 - inner[inner.len()-1].0).abs() < 1e-10 &&
-            (inner[0].1 - inner[inner.len()-1].1).abs() < 1e-10 {
-            inner.len() - 1
-        } else {
-            inner.len()
-        };
-
-        for i in 0..inner_vertex_count {
-            let next = (i + 1) % inner_vertex_count;
-            edges.push([inner_start + i, inner_start + next]);
+    let (outer_start, outer_count) = push_loop(&outer);
+    if outer_count >= 2 {
+        for i in 0..outer_count {
+            let next = (i + 1) % outer_count;
+            edges.push([outer_start + i, outer_start + next]);
         }
     }
 
-    // Create CDT
+    for loop_points in &holes {
+        if loop_points.is_empty() {
+            continue;
+        }
+        let (loop_start, loop_count) = push_loop(loop_points);
+        if loop_count >= 2 {
+            for i in 0..loop_count {
+                let next = (i + 1) % loop_count;
+                edges.push([loop_start + i, loop_start + next]);
+            }
+        }
+    }
+
+    for loop_points in &building_loops {
+        if loop_points.is_empty() {
+            continue;
+        }
+        let (loop_start, loop_count) = push_loop(loop_points);
+        if loop_count >= 2 {
+            for i in 0..loop_count {
+                let next = (i + 1) % loop_count;
+                edges.push([loop_start + i, loop_start + next]);
+            }
+        }
+    }
+
     let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::default();
-    let mut vertex_handles = Vec::new();
+    let mut vertex_handles = Vec::with_capacity(vertices.len());
 
     for vertex in vertices {
         let handle = cdt.insert(vertex)?;
         vertex_handles.push(handle);
     }
 
-    // Add constraint edges if requested
-    let has_constraints = enforce_constraints && !edges.is_empty();
-    if has_constraints {
+    if enforce_constraints && !edges.is_empty() {
         for [i, j] in &edges {
             if *i != *j && *i < vertex_handles.len() && *j < vertex_handles.len() {
                 let vi = vertex_handles[*i];
@@ -184,67 +167,60 @@ fn triangulate_polygon(
         }
     }
 
-    // Refinement with hole exclusion
-    let excluded_faces = if has_constraints {
-        let mut params = RefinementParameters::<f64>::new()
-            .exclude_outer_faces(true);
+    let mut params = RefinementParameters::<f64>::new().exclude_outer_faces(false);
+    let mut should_refine = enforce_constraints && !edges.is_empty();
 
-        if let Some(max_edge_len) = maxh {
-            let max_area = 0.433 * max_edge_len * max_edge_len;
-            params = params.with_max_allowed_area(max_area);
-        }
+    if let Some(max_edge_len) = maxh {
+        let max_area = 0.433 * max_edge_len * max_edge_len;
+        params = params.with_max_allowed_area(max_area);
+        should_refine = true;
+    }
 
-        if quality == "moderate" {
-            params = params.with_angle_limit(AngleLimit::from_deg(25.0));
-        } else {
-            params = params.with_angle_limit(AngleLimit::from_deg(0.0));
-        }
-
-        let result = cdt.refine(params);
-        result.excluded_faces
+    if quality == "moderate" {
+        params = params.with_angle_limit(AngleLimit::from_deg(25.0));
+        should_refine = true;
     } else {
-        if let Some(max_edge_len) = maxh {
-            let max_area = 0.433 * max_edge_len * max_edge_len;
-            let mut params = RefinementParameters::<f64>::new()
-                .with_max_allowed_area(max_area)
-                .exclude_outer_faces(false);
+        params = params.with_angle_limit(AngleLimit::from_deg(0.0));
+    }
 
-            if quality == "moderate" {
-                params = params.with_angle_limit(AngleLimit::from_deg(25.0));
-            } else {
-                params = params.with_angle_limit(AngleLimit::from_deg(0.0));
-            }
+    if should_refine {
+        cdt.refine(params);
+    }
 
-            cdt.refine(params);
-        }
-        Vec::new()
-    };
-
-    let excluded_set: std::collections::HashSet<_> = excluded_faces.into_iter().collect();
-
-    // Extract points and triangles
     let mut point_map = HashMap::new();
     let mut output_points = Vec::new();
 
     for (idx, vertex) in cdt.vertices().enumerate() {
         let pos = vertex.position();
         point_map.insert(vertex.fix(), idx);
-        output_points.push(SpadePoint { x: pos.x, y: pos.y, z: 0.0 });
+        output_points.push(SpadePoint {
+            x: pos.x,
+            y: pos.y,
+            z: 0.0,
+        });
     }
 
     let mut output_triangles = Vec::new();
     for face in cdt.inner_faces() {
-        if !excluded_set.contains(&face.fix()) {
-            let vertices: [_; 3] = face.vertices().map(|v| point_map[&v.fix()]);
+        let vertices_with_pos: [_; 3] =
+            face.vertices().map(|v| (point_map[&v.fix()], v.position()));
+
+        let centroid = Point2::new(
+            (vertices_with_pos[0].1.x + vertices_with_pos[1].1.x + vertices_with_pos[2].1.x) / 3.0,
+            (vertices_with_pos[0].1.y + vertices_with_pos[1].1.y + vertices_with_pos[2].1.y) / 3.0,
+        );
+
+        if point_in_polygon(&centroid, &outer)
+            && holes.iter().all(|hole| !point_in_polygon(&centroid, hole))
+        {
             output_triangles.push(SpadeTriangle {
-                v0: vertices[0],
-                v1: vertices[1],
-                v2: vertices[2],
+                v0: vertices_with_pos[0].0,
+                v1: vertices_with_pos[1].0,
+                v2: vertices_with_pos[2].0,
             });
         }
     }
 
-    // Extract constraint edges
     let mut constraint_edges = Vec::new();
     for edge in cdt.undirected_edges() {
         if edge.is_constraint_edge() {
@@ -258,6 +234,95 @@ fn triangulate_polygon(
         triangles: output_triangles,
         edges: constraint_edges,
     })
+}
+
+fn normalize_loop(mut points: Vec<Point2<f64>>) -> Vec<Point2<f64>> {
+    if points.len() >= 2 && points.first() == points.last() {
+        points.pop();
+    }
+    points
+}
+
+unsafe fn convert_loop_group(
+    loops_ptr: *const *const SpadePoint,
+    counts_ptr: *const usize,
+    num_loops: usize,
+) -> Vec<Vec<Point2<f64>>> {
+    if loops_ptr.is_null() || counts_ptr.is_null() || num_loops == 0 {
+        return Vec::new();
+    }
+
+    let ptrs = std::slice::from_raw_parts(loops_ptr, num_loops);
+    let counts = std::slice::from_raw_parts(counts_ptr, num_loops);
+
+    let mut result = Vec::with_capacity(num_loops);
+    for i in 0..num_loops {
+        if ptrs[i].is_null() || counts[i] == 0 {
+            continue;
+        }
+        let slice = std::slice::from_raw_parts(ptrs[i], counts[i]);
+        let loop_points = slice
+            .iter()
+            .map(|p| Point2::new(p.x, p.y))
+            .collect::<Vec<_>>();
+        result.push(normalize_loop(loop_points));
+    }
+
+    result
+}
+
+fn point_in_polygon(point: &Point2<f64>, polygon: &[Point2<f64>]) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+
+    let mut inside = false;
+    let mut j = polygon.len() - 1;
+
+    for (i, pi) in polygon.iter().enumerate() {
+        let pj = &polygon[j];
+
+        if point_on_segment(point, pi, pj) {
+            return true;
+        }
+
+        let intersects = ((pi.y > point.y) != (pj.y > point.y))
+            && (point.x < (pj.x - pi.x) * (point.y - pi.y) / (pj.y - pi.y) + pi.x);
+
+        if intersects {
+            inside = !inside;
+        }
+
+        j = i;
+    }
+
+    inside
+}
+
+fn point_on_segment(point: &Point2<f64>, a: &Point2<f64>, b: &Point2<f64>) -> bool {
+    const EPS: f64 = 1e-9;
+
+    let ab_x = b.x - a.x;
+    let ab_y = b.y - a.y;
+    let ap_x = point.x - a.x;
+    let ap_y = point.y - a.y;
+
+    let cross = ab_x * ap_y - ab_y * ap_x;
+    if cross.abs() > EPS {
+        return false;
+    }
+
+    let dot = ap_x * ab_x + ap_y * ab_y;
+    if dot < -EPS {
+        return false;
+    }
+
+    let squared_len = ab_x * ab_x + ab_y * ab_y;
+    if dot - squared_len > EPS {
+        return false;
+    }
+
+    true
 }
 
 /// Get number of points in result
@@ -301,7 +366,10 @@ pub extern "C" fn spade_result_get_points(result: *const SpadeResult, buffer: *m
 
 /// Get triangles from result (copies into user-provided buffer)
 #[no_mangle]
-pub extern "C" fn spade_result_get_triangles(result: *const SpadeResult, buffer: *mut SpadeTriangle) {
+pub extern "C" fn spade_result_get_triangles(
+    result: *const SpadeResult,
+    buffer: *mut SpadeTriangle,
+) {
     if result.is_null() || buffer.is_null() {
         return;
     }

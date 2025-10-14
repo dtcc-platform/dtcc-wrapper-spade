@@ -41,7 +41,7 @@ int main() {
         std::cout << "  Hole 1: square (4,4) to (6,6)\n";
         std::cout << "  Hole 2: triangle at (1,1)\n\n";
 
-        auto result = spade::triangulate(
+        auto result = spade::triangulate_with_holes(
             outer,
             inner_loops,
             1.0,  // maxh = 1.0
