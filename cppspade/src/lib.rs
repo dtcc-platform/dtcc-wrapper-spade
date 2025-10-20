@@ -1,7 +1,28 @@
 use spade::{
     AngleLimit, ConstrainedDelaunayTriangulation, Point2, RefinementParameters, Triangulation,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+const ERR_UNKNOWN: i32 = 0;
+const ERR_CONSTRAINT_PANIC: i32 = 1;
+
+static CURRENT_EDGE_INDEX: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+#[derive(Clone)]
+struct EdgeDebugInfo {
+    poly_id: i32,
+    seg_idx: usize,
+    start: usize,
+    end: usize,
+}
+
+thread_local! {
+    static EDGE_DEBUG_INFO: RefCell<Vec<EdgeDebugInfo>> = RefCell::new(Vec::new());
+}
 
 #[repr(C)]
 pub struct SpadePoint {
@@ -30,6 +51,14 @@ pub enum SpadeQuality {
     Moderate = 1,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub struct SpadeError {
+    pub code: i32,
+    pub poly_id: i32,
+    pub seg_idx: usize,
+}
+
 pub struct SpadeResult {
     pub points: Vec<SpadePoint>,
     pub triangles: Vec<SpadeTriangle>,
@@ -45,9 +74,9 @@ pub extern "C" fn spade_triangulate(
     hole_loops: *const *const SpadePoint,
     hole_loop_counts: *const usize,
     num_hole_loops: usize,
-    building_loops: *const *const SpadePoint,
-    building_loop_counts: *const usize,
-    num_building_loops: usize,
+    interior_loops: *const *const SpadePoint,
+    interior_loop_counts: *const usize,
+    num_interior_loops: usize,
     maxh: f64,
     quality: SpadeQuality,
     enforce_constraints: i32,
@@ -56,7 +85,7 @@ pub extern "C" fn spade_triangulate(
         return std::ptr::null_mut();
     }
 
-    unsafe {
+    let attempt = catch_unwind(AssertUnwindSafe(|| unsafe {
         let outer_slice = std::slice::from_raw_parts(outer_points, outer_count);
         let outer = normalize_loop(
             outer_slice
@@ -66,30 +95,56 @@ pub extern "C" fn spade_triangulate(
         );
 
         let holes = convert_loop_group(hole_loops, hole_loop_counts, num_hole_loops);
-        let building_loops =
-            convert_loop_group(building_loops, building_loop_counts, num_building_loops);
+        let interior_loops =
+            convert_loop_group(interior_loops, interior_loop_counts, num_interior_loops);
 
-        match triangulate_polygon(
+        triangulate_polygon(
             outer,
             holes,
-            building_loops,
+            interior_loops,
             if maxh > 0.0 { Some(maxh) } else { None },
             match quality {
                 SpadeQuality::Moderate => "moderate".to_string(),
                 SpadeQuality::Default => "default".to_string(),
             },
             enforce_constraints != 0,
-        ) {
-            Ok(result) => Box::into_raw(Box::new(result)),
-            Err(_) => std::ptr::null_mut(),
+        )
+    }));
+
+    let result_ptr = match attempt {
+        Ok(Ok(result)) => {
+            clear_last_error();
+            Box::into_raw(Box::new(result))
         }
-    }
+        Ok(Err(_)) => {
+            store_last_error(SpadeError {
+                code: ERR_UNKNOWN,
+                poly_id: -1,
+                seg_idx: 0,
+            });
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            let err = current_constraint_error().unwrap_or(SpadeError {
+                code: ERR_UNKNOWN,
+                poly_id: -1,
+                seg_idx: 0,
+            });
+            store_last_error(err);
+            std::ptr::null_mut()
+        }
+    };
+
+    EDGE_DEBUG_INFO.with(|info| info.borrow_mut().clear());
+    CURRENT_EDGE_INDEX.store(usize::MAX, Ordering::SeqCst);
+
+    result_ptr
 }
 
 fn triangulate_polygon(
     outer: Vec<Point2<f64>>,
     holes: Vec<Vec<Point2<f64>>>,
-    building_loops: Vec<Vec<Point2<f64>>>,
+    interior_loops: Vec<Vec<Point2<f64>>>,
     maxh: Option<f64>,
     quality: String,
     enforce_constraints: bool,
@@ -97,6 +152,7 @@ fn triangulate_polygon(
     // Build vertex list and edge list for CDT
     let mut vertices = Vec::new();
     let mut edges = Vec::new();
+    let mut edge_debug = Vec::new();
     let mut vertex_idx = 0;
 
     let outer_len = outer.len();
@@ -104,47 +160,46 @@ fn triangulate_polygon(
         return Err("Outer boundary must contain at least three points".into());
     }
 
-    let mut push_loop = |loop_points: &Vec<Point2<f64>>| {
+    let mut push_loop = |loop_points: &Vec<Point2<f64>>, poly_id: i32| {
         let start_index = vertex_idx;
         for point in loop_points {
             vertices.push(*point);
             vertex_idx += 1;
         }
-        (start_index, loop_points.len())
+        let loop_len = loop_points.len();
+        if loop_len >= 2 {
+            for i in 0..loop_len {
+                let next = (i + 1) % loop_len;
+                edges.push([start_index + i, start_index + next]);
+                edge_debug.push(EdgeDebugInfo {
+                    poly_id,
+                    seg_idx: i,
+                    start: start_index + i,
+                    end: start_index + next,
+                });
+            }
+        }
     };
 
-    let (outer_start, outer_count) = push_loop(&outer);
-    if outer_count >= 2 {
-        for i in 0..outer_count {
-            let next = (i + 1) % outer_count;
-            edges.push([outer_start + i, outer_start + next]);
-        }
-    }
+    let mut hole_poly_id = 1;
+    let mut building_poly_id = -1;
+
+    push_loop(&outer, 0);
 
     for loop_points in &holes {
         if loop_points.is_empty() {
             continue;
         }
-        let (loop_start, loop_count) = push_loop(loop_points);
-        if loop_count >= 2 {
-            for i in 0..loop_count {
-                let next = (i + 1) % loop_count;
-                edges.push([loop_start + i, loop_start + next]);
-            }
-        }
+        push_loop(loop_points, hole_poly_id);
+        hole_poly_id += 1;
     }
 
-    for loop_points in &building_loops {
+    for loop_points in &interior_loops {
         if loop_points.is_empty() {
             continue;
         }
-        let (loop_start, loop_count) = push_loop(loop_points);
-        if loop_count >= 2 {
-            for i in 0..loop_count {
-                let next = (i + 1) % loop_count;
-                edges.push([loop_start + i, loop_start + next]);
-            }
-        }
+        push_loop(loop_points, building_poly_id);
+        building_poly_id -= 1;
     }
 
     let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::default();
@@ -156,15 +211,25 @@ fn triangulate_polygon(
     }
 
     if enforce_constraints && !edges.is_empty() {
-        for [i, j] in &edges {
+        EDGE_DEBUG_INFO.with(|storage| {
+            *storage.borrow_mut() = edge_debug.clone();
+        });
+
+        for (edge_idx, ([i, j], meta)) in edges.iter().zip(edge_debug.iter()).enumerate() {
             if *i != *j && *i < vertex_handles.len() && *j < vertex_handles.len() {
                 let vi = vertex_handles[*i];
                 let vj = vertex_handles[*j];
                 if vi != vj {
+                    CURRENT_EDGE_INDEX.store(edge_idx, Ordering::SeqCst);
+                    // eprintln!(
+                    //     "[spade] inserting constraint poly_id={} seg_idx={} ({} -> {})",
+                    //     meta.poly_id, meta.seg_idx, meta.start, meta.end
+                    // );
                     cdt.add_constraint(vi, vj);
                 }
             }
         }
+        CURRENT_EDGE_INDEX.store(usize::MAX, Ordering::SeqCst);
     }
 
     let mut params = RefinementParameters::<f64>::new().exclude_outer_faces(false);
@@ -399,4 +464,57 @@ pub extern "C" fn spade_result_free(result: *mut SpadeResult) {
             let _ = Box::from_raw(result);
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn spade_last_error(out: *mut SpadeError) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    if let Some(err) = take_last_error() {
+        unsafe {
+            *out = err;
+        }
+        true
+    } else {
+        false
+    }
+}
+
+fn last_error_storage() -> &'static Mutex<Option<SpadeError>> {
+    static LAST_ERROR: OnceLock<Mutex<Option<SpadeError>>> = OnceLock::new();
+    LAST_ERROR.get_or_init(|| Mutex::new(None))
+}
+
+fn store_last_error(err: SpadeError) {
+    let storage = last_error_storage();
+    if let Ok(mut slot) = storage.lock() {
+        *slot = Some(err);
+    }
+}
+
+fn clear_last_error() {
+    let storage = last_error_storage();
+    if let Ok(mut slot) = storage.lock() {
+        slot.take();
+    }
+}
+
+fn take_last_error() -> Option<SpadeError> {
+    let storage = last_error_storage();
+    storage.lock().ok().and_then(|mut guard| guard.take())
+}
+
+fn current_constraint_error() -> Option<SpadeError> {
+    let idx = CURRENT_EDGE_INDEX.load(Ordering::SeqCst);
+    if idx == usize::MAX {
+        return None;
+    }
+    EDGE_DEBUG_INFO
+        .with(|info| info.borrow().get(idx).cloned())
+        .map(|meta| SpadeError {
+            code: ERR_CONSTRAINT_PANIC,
+            poly_id: meta.poly_id,
+            seg_idx: meta.seg_idx,
+        })
 }

@@ -1,6 +1,7 @@
 #ifndef SPADE_FFI_H
 #define SPADE_FFI_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -28,6 +29,18 @@ typedef struct {
     size_t v1;
 } SpadeEdge;
 
+// C-compatible error structure
+typedef struct {
+    int32_t code;
+    int32_t poly_id;
+    size_t seg_idx;
+} SpadeError;
+
+enum {
+    SPADE_ERROR_NONE = 0,
+    SPADE_ERROR_CONSTRAINT_PANIC = 1
+};
+
 // Opaque handle to triangulation result
 typedef struct SpadeResult SpadeResult;
 
@@ -45,9 +58,9 @@ SpadeResult* spade_triangulate(
     const SpadePoint* const* hole_loops,
     const size_t* hole_loop_counts,
     size_t num_hole_loops,
-    const SpadePoint* const* building_loops,
-    const size_t* building_loop_counts,
-    size_t num_building_loops,
+    const SpadePoint* const* interior_loops,
+    const size_t* interior_loop_counts,
+    size_t num_interior_loops,
     double maxh,
     SpadeQuality quality,
     int enforce_constraints
@@ -73,6 +86,9 @@ void spade_result_get_edges(const SpadeResult* result, SpadeEdge* buffer);
 
 // Free the result
 void spade_result_free(SpadeResult* result);
+
+// Retrieve and clear the last error
+bool spade_last_error(SpadeError* out_error);
 
 #ifdef __cplusplus
 }

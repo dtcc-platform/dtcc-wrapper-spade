@@ -5,3 +5,6 @@ target_link_libraries(simple_triangulation PRIVATE spade_wrapper)
 
 add_executable(polygon_with_holes polygon_with_holes.cpp)
 target_link_libraries(polygon_with_holes PRIVATE spade_wrapper)
+
+add_executable(intersecting_constraints intersecting_constraints.cpp)
+target_link_libraries(intersecting_constraints PRIVATE spade_wrapper)

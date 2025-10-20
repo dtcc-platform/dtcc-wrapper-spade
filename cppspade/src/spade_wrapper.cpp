@@ -1,15 +1,16 @@
 #include "spade_wrapper.h"
 #include "spade_ffi.h"
 #include <cmath>
-#include <stdexcept>
 #include <memory>
+#include <sstream>
+#include <stdexcept>
 
 namespace spade {
 
 TriangulationResult triangulate(
     const std::vector<Point>& outer,
     const std::vector<std::vector<Point>>& holes,
-    const std::vector<std::vector<Point>>& building_loops,
+    const std::vector<std::vector<Point>>& interior_loops,
     double maxh,
     Quality quality,
     bool enforce_constraints
@@ -57,20 +58,20 @@ TriangulationResult triangulate(
     }
 
     // Convert building loops
-    std::vector<std::vector<SpadePoint>> building_loops_c;
-    building_loops_c.reserve(building_loops.size());
-    for (const auto& loop : building_loops) {
+    std::vector<std::vector<SpadePoint>> interior_loops_c;
+    interior_loops_c.reserve(interior_loops.size());
+    for (const auto& loop : interior_loops) {
         auto converted = convert_loop(loop);
         if (!converted.empty()) {
-            building_loops_c.push_back(std::move(converted));
+            interior_loops_c.push_back(std::move(converted));
         }
     }
 
     std::vector<const SpadePoint*> building_ptrs;
     std::vector<size_t> building_counts;
-    building_ptrs.reserve(building_loops_c.size());
-    building_counts.reserve(building_loops_c.size());
-    for (const auto& loop : building_loops_c) {
+    building_ptrs.reserve(interior_loops_c.size());
+    building_counts.reserve(interior_loops_c.size());
+    for (const auto& loop : interior_loops_c) {
         building_ptrs.push_back(loop.data());
         building_counts.push_back(loop.size());
     }
@@ -95,6 +96,14 @@ TriangulationResult triangulate(
     );
 
     if (!result_ptr) {
+        SpadeError error{};
+        if (spade_last_error(&error)) {
+            std::ostringstream msg;
+            msg << "Triangulation failed (code=" << error.code
+                << ", poly_id=" << error.poly_id
+                << ", seg_idx=" << error.seg_idx << ")";
+            throw std::runtime_error(msg.str());
+        }
         throw std::runtime_error("Triangulation failed");
     }
 
